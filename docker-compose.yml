@@ -1,0 +1,46 @@
+version: "3.9"
+services:
+  ingestion:
+    build:
+      context: ./services/ingestion
+    container_name: raksh-ingestion
+    ports:
+      - "8001:8001"
+    environment:
+      - SUPABASE_URL=http://host.docker.internal:54321
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-creds
+      - FOLDER_WATCH_PATH=/watch
+      - INGESTION_API_KEY=${INGESTION_API_KEY}
+      - EXTRACTION_BACKEND=${EXTRACTION_BACKEND:-api}
+      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-imap.gmail.com}
+      - EMAIL_IMAP_PORT=${EMAIL_IMAP_PORT:-993}
+      - EMAIL_ADDRESS=${EMAIL_ADDRESS:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173}
+    volumes:
+      - ./services/ingestion:/app
+      - ${FOLDER_WATCH_PATH:-./watch}:/watch
+      - ./secrets/gcp-credentials.json:/run/secrets/gcp-creds:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: raksh-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      ingestion:
+        condition: service_healthy
+    restart: unless-stopped
