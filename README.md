@@ -1,148 +1,104 @@
-# Raksh Clinical Ingestion Backend
+# raksh
+
+clinical document ingestion backend. takes medical documents (lab reports, prescriptions, discharge summaries, imaging), extracts structured data using a vision language model, and stores it in a typed schema with full audit trail.
+
+built for indian healthcare. hipaa and dpdp act 2023 compliant.
 
 ![Coming Soon](assets/Coming%20soon....png)
 
-**Enterprise-grade clinical document ingestion, extraction, and intelligence pipeline.**
-
-HIPAA and DPDP Act 2023 compliant. Built for Indian healthcare.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    INGESTION GATEWAY                      │
-│  Upload • Chunked Upload • Email • Fax • DICOM/PACS     │
-└──────────────┬───────────────────────────────┬────────────┘
-               ▼                               ▼
-┌──────────────────────┐        ┌──────────────────────────┐
-│   PHI De-identification      │  Document Classification  │
-│   (Presidio + Regex)         │  (VLM + Keyword)          │
-└──────────┬───────────┘        └──────────┬───────────────┘
-           ▼                               ▼
-┌──────────────────────────────────────────────────────────┐
-│                  EXTRACTION ENGINE                        │
-│  Claude Sonnet (VLM) → Tesseract 5 (OCR Fallback)       │
-│  Signal-Derived Confidence Scoring (0.50–0.98)           │
-└──────────────────────────┬───────────────────────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│                 CLINICAL INTELLIGENCE                     │
-│  • Disease Protocol Engine (6 categories)                │
-│  • Drug Formulary (40 drugs, 10 interactions)            │
-│  • LOINC Mapping (90+ parameters)                        │
-│  • Reference Range Enrichment (Indian population)        │
-│  • Clinical NLP (sentence-boundary negation)             │
-│  • Human Review Queue (low-confidence triage)            │
-└──────────────────────────┬───────────────────────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│                    PERSISTENCE                            │
-│  Supabase (PostgreSQL + RLS) • FHIR R4 • ABDM            │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Quick Start
+## quickstart
 
 ```bash
-# Clone
 git clone https://github.com/riteshroshann/raksh_master.git
 cd raksh_master
-
-# Setup
 cp .env.example .env
-# Fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
-
-# Install
+# fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
 cd services/ingestion
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
-
-# Run
 uvicorn main:app --reload --port 8001
+```
 
-# Or with Docker
-cd ../..
+or with docker:
+
+```bash
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-## API Endpoints
+## what it does
 
-### Ingestion
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/ingest/upload` | Upload document for extraction |
-| `POST` | `/ingest/confirm` | Confirm extracted parameters |
-| `POST` | `/ingest/chunked/init` | Start chunked upload |
-| `POST` | `/ingest/chunked/part` | Upload chunk |
-| `POST` | `/ingest/chunked/complete` | Complete chunked upload |
+1. **ingestion** — upload a pdf/image, it gets classified (lab report, prescription, etc.) and extracted into structured json using claude sonnet as a vlm. tesseract 5 as fallback.
 
-### Clinical Intelligence
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/analyze/disease` | Disease protocol analysis |
-| `POST` | `/analyze/prescription` | Prescription safety analysis |
-| `POST` | `/analyze/interactions` | Drug-drug interaction check |
+2. **phi de-identification** — all extractions pass through presidio + regex before anything is stored. aadhaar, pan, abha, phone, email — redacted before persistence.
 
-### Data Access
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/documents` | List documents for member |
-| `GET` | `/documents/{id}/parameters` | Get document parameters |
-| `GET` | `/parameters/trend` | Parameter trend over time |
-| `GET` | `/reference-ranges/lookup` | Indian reference range lookup |
+3. **confidence scoring** — each extracted field gets a signal-derived confidence score (0.50-0.98) based on field completeness, numeric parseability, unit presence, reference ranges. low-confidence fields get routed to a human review queue.
 
-### Review Queue
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/reviews/pending` | List pending reviews |
-| `POST` | `/reviews/{id}/approve` | Approve extraction |
-| `POST` | `/reviews/{id}/correct` | Correct extraction |
-| `POST` | `/reviews/{id}/reject` | Reject extraction |
-| `GET` | `/reviews/stats` | Review queue statistics |
+4. **clinical intelligence** — on confirmation, parameters are enriched with indian population reference ranges, interpreted through disease-specific protocols (diabetes staging, ckd staging, cardiac markers, etc.), and checked for drug interactions if it's a prescription.
 
-### Compliance
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/consent` | Grant consent |
-| `POST` | `/consent/withdraw` | Withdraw consent |
-| `POST` | `/erasure` | Right to erasure (DPDP Act) |
-| `GET` | `/audit` | Audit log |
+5. **interop** — fhir r4 bundle export, abdm/abha integration, loinc coding for 90+ parameters.
 
-### Interoperability
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/fhir/bundle/{id}` | FHIR R4 bundle export |
-| `POST` | `/abdm/register` | ABHA ID registration |
-| `POST` | `/abdm/consent-request` | ABDM consent request |
+## architecture
 
-## Disease Protocol Engine
+```
+document in -> phi deid -> classify -> extract (vlm) -> confidence score -> review queue
+                                                                              |
+                                                            confirm -> enrich ranges -> disease protocols -> store
+```
 
-Supports clinical interpretation for 6 disease categories:
+## key files
 
-| Category | Key Parameters | Capabilities |
-|----------|---------------|--------------|
-| **Diabetes** | HbA1c, FPG, PPG, eGFR | Staging, nephropathy co-monitoring |
-| **Thyroid** | TSH, FT4, FT3 | Hyper/hypo classification |
-| **CKD** | eGFR, Creatinine, K+ | 5-stage classification |
-| **Cardiac** | Troponin, BNP, LDL | AMI detection, HF screening |
-| **Anemia** | Hb, Ferritin, MCV | Type classification |
-| **Liver** | ALT, AST, Bilirubin | Injury grading, AST:ALT ratio |
+```
+services/ingestion/
+  main.py                          # fastapi app
+  config.py                        # env-based settings
+  routes/ingest.py                 # upload, confirm, chunked upload
+  routes/health.py                 # health, metrics, documents, reviews, analysis
+  pipeline/
+    extractor.py                   # vlm extraction + confidence scoring
+    classifier.py                  # document type classification
+    clinical_nlp.py                # negation/uncertainty detection (context engine)
+    disease_protocols.py           # diabetes/thyroid/ckd/cardiac/anemia/liver interpretation
+    phi_deid.py                    # presidio + regex de-identification
+    confidence.py                  # field-level confidence thresholds
+  services/
+    database.py                    # supabase-py typed client
+    drug_formulary.py              # 40 drugs, 10 interactions, dose validation
+    loinc_mapping.py               # 90+ loinc codes, fhir coding
+    reference_ranges.py            # indian population ranges + flagging
+    review_queue.py                # human-in-the-loop verification
+    fhir_mapper.py                 # fhir r4 bundle generation
+    audit.py                       # audit logging
+    consent.py                     # dpdp act consent + right to erasure
+supabase/migrations/               # 8 migrations
+```
 
-## Testing
+## tests
 
 ```bash
 cd services/ingestion
 python -m pytest tests/ -v --tb=short
+# 261 tests
 ```
 
-## Releases
+## api
 
-- **v1.0.0** — Disease protocols, drug formulary, LOINC mapping, review queue, dev tooling
-- **v0.2.0** — Chunked upload PHI fix, signal-derived confidence, drug formulary
-- **v0.1.0** — PHI de-identification, supabase migration, clinical NLP
+the service exposes ~30 endpoints. run it and go to `/docs` for the full openapi spec.
 
-## License
+the important ones:
 
-Proprietary. All rights reserved.
+```
+POST /ingest/upload              # upload a document
+POST /ingest/confirm             # confirm extracted parameters
+POST /analyze/disease            # disease protocol analysis
+POST /analyze/prescription       # prescription safety check
+POST /analyze/interactions       # drug-drug interactions
+GET  /reviews/pending            # human review queue
+GET  /parameters/trend           # parameter trend over time
+GET  /fhir/bundle/{id}           # fhir r4 export
+```
+
+## releases
+
+- v1.0.0 — disease protocols, loinc, review queue, drug formulary, dev tooling
+- v0.2.0 — chunked upload phi fix, signal-derived confidence, drug formulary
+- v0.1.0 — phi de-identification, supabase migration, clinical nlp
