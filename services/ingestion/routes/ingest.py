@@ -95,19 +95,44 @@ async def ingest_upload(
         await audit_service.log_classification_failure(ingest_id, str(exc))
         raise HTTPException(status_code=422, detail=f"Document classification failed: {str(exc)}")
 
+    extraction_model_used = "none"
     try:
         raw_extractions = await extract_fields(contents, doc_type)
+        extraction_model_used = raw_extractions[0].get("extraction_model", "unknown") if raw_extractions else "none"
         await audit_service.log_extraction(
             ingest_id, doc_type.value,
-            raw_extractions[0].get("extraction_model", "unknown") if raw_extractions else "none",
+            extraction_model_used,
             len(raw_extractions),
         )
     except Exception as exc:
+        logger.error(
+            "extraction_failed_vlm_to_ocr_fallback",
+            ingest_id=ingest_id,
+            doc_type=doc_type.value,
+            error=str(exc),
+            severity="ERROR",
+        )
         await audit_service.log_extraction_failure(ingest_id, "unknown", str(exc))
         raw_extractions = []
 
     scored_extractions = score_confidence(raw_extractions)
     validated_extractions = validate_before_save(scored_extractions, doc_type)
+
+    from pipeline.phi_deid import deid_pipeline
+
+    deidentified_extractions = []
+    phi_entities_found = 0
+    for extraction in validated_extractions:
+        cleaned, entities = deid_pipeline.deidentify_structured(extraction)
+        phi_entities_found += len(entities)
+        deidentified_extractions.append(cleaned)
+
+    if phi_entities_found > 0:
+        logger.warning(
+            "phi_detected_and_redacted_in_extraction",
+            ingest_id=ingest_id,
+            phi_entities_redacted=phi_entities_found,
+        )
 
     elapsed_ms = (time.monotonic() - start_time) * 1000
 
@@ -115,15 +140,16 @@ async def ingest_upload(
         "ingest_completed",
         ingest_id=ingest_id,
         doc_type=doc_type.value,
-        num_fields=len(validated_extractions),
+        num_fields=len(deidentified_extractions),
         channel=IngestChannel.UPLOAD.value,
         duration_ms=round(elapsed_ms, 2),
+        phi_redacted=phi_entities_found,
     )
 
     return UploadResponse(
         storage_path=storage_path,
         doc_type=doc_type,
-        extractions=[ExtractedField(**f) for f in validated_extractions],
+        extractions=[ExtractedField(**f) for f in deidentified_extractions],
         requires_confirmation=True,
         ingest_id=ingest_id,
         content_hash=content_hash,

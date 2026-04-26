@@ -211,9 +211,26 @@ SNOMED_PARTIAL_MAP = {
 
 
 class ConTextEngine:
+    SENTENCE_BOUNDARY = re.compile(r"[.;!\?\n]")
+
     def __init__(self):
-        self._negation_window = 6
-        self._uncertainty_window = 5
+        self._max_token_fallback = 15
+        self._uncertainty_max_tokens = 12
+
+    def _find_sentence_bounds(self, text: str, position: int) -> tuple[int, int]:
+        boundaries = [m.start() for m in self.SENTENCE_BOUNDARY.finditer(text)]
+        boundaries = [0] + [b + 1 for b in boundaries] + [len(text)]
+
+        for i in range(len(boundaries) - 1):
+            if boundaries[i] <= position < boundaries[i + 1]:
+                return boundaries[i], boundaries[i + 1]
+
+        return 0, len(text)
+
+    def _in_same_sentence(self, text: str, pos_a: int, pos_b: int) -> bool:
+        bounds_a = self._find_sentence_bounds(text, pos_a)
+        bounds_b = self._find_sentence_bounds(text, pos_b)
+        return bounds_a == bounds_b
 
     def detect_negation(self, text: str, target_span: tuple[int, int]) -> bool:
         text_lower = text.lower()
@@ -226,12 +243,20 @@ class ConTextEngine:
                 trigger_start = match.start()
 
                 if trigger_end <= target_start:
-                    words_between = text[trigger_end:target_start].split()
-                    if len(words_between) <= self._negation_window:
-                        if not self._has_scope_break(text[trigger_end:target_start]):
+                    if not self._in_same_sentence(text, trigger_start, target_start):
+                        continue
+
+                    between_text = text[trigger_end:target_start]
+                    words_between = between_text.split()
+
+                    if len(words_between) <= self._max_token_fallback:
+                        if not self._has_scope_break(between_text):
                             return True
 
                 if target_end <= trigger_start:
+                    if not self._in_same_sentence(text, target_start, trigger_start):
+                        continue
+
                     words_between = text[target_end:trigger_start].split()
                     if len(words_between) <= 3:
                         return True
@@ -246,11 +271,17 @@ class ConTextEngine:
             pattern = re.compile(r"\b" + re.escape(trigger) + r"\b", re.IGNORECASE)
             for match in pattern.finditer(text_lower):
                 trigger_end = match.end()
+                trigger_start = match.start()
 
                 if trigger_end <= target_start:
-                    words_between = text[trigger_end:target_start].split()
-                    if len(words_between) <= self._uncertainty_window:
-                        if not self._has_scope_break(text[trigger_end:target_start]):
+                    if not self._in_same_sentence(text, trigger_start, target_start):
+                        continue
+
+                    between_text = text[trigger_end:target_start]
+                    words_between = between_text.split()
+
+                    if len(words_between) <= self._uncertainty_max_tokens:
+                        if not self._has_scope_break(between_text):
                             return True
 
         return False
@@ -262,9 +293,10 @@ class ConTextEngine:
         for trigger in FAMILY_HISTORY_TRIGGERS:
             idx = text_lower.find(trigger)
             if idx != -1 and idx < target_start:
-                words_between = text[idx + len(trigger):target_start].split()
-                if len(words_between) <= 8:
-                    return True
+                if self._in_same_sentence(text, idx, target_start):
+                    words_between = text[idx + len(trigger):target_start].split()
+                    if len(words_between) <= 8:
+                        return True
 
         return False
 
@@ -277,6 +309,8 @@ class ConTextEngine:
             for match in pattern.finditer(text_lower):
                 trigger_end = match.end()
                 if trigger_end <= target_start:
+                    if not self._in_same_sentence(text, match.start(), target_start):
+                        continue
                     words_between = text[trigger_end:target_start].split()
                     if len(words_between) <= 4:
                         return True
@@ -297,11 +331,10 @@ class ConTextEngine:
     def _has_scope_break(self, text: str) -> bool:
         scope_breakers = [
             "but", "however", "although", "except", "yet",
-            ".", ";", ":", "\n",
         ]
         text_lower = text.lower()
         for breaker in scope_breakers:
-            if breaker in text_lower:
+            if re.search(r"\b" + breaker + r"\b", text_lower):
                 return True
         return False
 
