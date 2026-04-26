@@ -1,22 +1,21 @@
 from datetime import date
 from typing import Optional
 
-import httpx
 import structlog
+from supabase import create_client, Client
 
 from config import settings
 
 logger = structlog.get_logger()
 
 
+def _get_client() -> Client:
+    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+
+
 class ReferenceRangeService:
     def __init__(self):
-        self._base_url = f"{settings.supabase_url}/rest/v1"
-        self._headers = {
-            "Authorization": f"Bearer {settings.supabase_service_role_key}",
-            "apikey": settings.supabase_service_role_key,
-            "Content-Type": "application/json",
-        }
+        self._client: Client = _get_client()
         self._cache: dict[str, list[dict]] = {}
 
     async def lookup(
@@ -33,7 +32,7 @@ class ReferenceRangeService:
                 return cached[0]
             return None
 
-        ranges = await self._fetch_ranges(parameter_name, sex, population)
+        ranges = self._fetch_ranges(parameter_name, sex, population)
 
         if age is not None:
             ranges = [
@@ -43,7 +42,7 @@ class ReferenceRangeService:
             ]
 
         if not ranges and sex != "any":
-            ranges = await self._fetch_ranges(parameter_name, "any", population)
+            ranges = self._fetch_ranges(parameter_name, "any", population)
             if age is not None:
                 ranges = [
                     r for r in ranges
@@ -52,7 +51,7 @@ class ReferenceRangeService:
                 ]
 
         if not ranges and population != "western":
-            western_ranges = await self._fetch_ranges(parameter_name, sex, "western")
+            western_ranges = self._fetch_ranges(parameter_name, sex, "western")
             if age is not None:
                 western_ranges = [
                     r for r in western_ranges
@@ -75,29 +74,24 @@ class ReferenceRangeService:
             return ranges[0]
         return None
 
-    async def _fetch_ranges(
+    def _fetch_ranges(
         self, parameter_name: str, sex: str, population: str
     ) -> list[dict]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            params = {
-                "parameter_name": f"eq.{parameter_name.lower()}",
-                "sex": f"eq.{sex}",
-                "population": f"eq.{population}",
-                "order": "version.desc",
-            }
-
-            response = await client.get(
-                f"{self._base_url}/reference_ranges",
-                headers=self._headers,
-                params=params,
+        try:
+            result = (
+                self._client.table("reference_ranges")
+                .select("*")
+                .eq("parameter_name", parameter_name.lower())
+                .eq("sex", sex)
+                .eq("population", population)
+                .order("version", desc=True)
+                .execute()
             )
-
-            if response.status_code == 200:
-                return response.json()
-
+            return result.data
+        except Exception as exc:
             logger.error(
                 "reference_range_fetch_failed",
-                status=response.status_code,
+                error=str(exc),
                 parameter=parameter_name,
             )
             return []
@@ -117,6 +111,13 @@ class ReferenceRangeService:
 
         range_low = ref_range.get("range_low")
         range_high = ref_range.get("range_high")
+        critical_low = ref_range.get("critical_low")
+        critical_high = ref_range.get("critical_high")
+
+        if critical_low is not None and value < float(critical_low):
+            return "critical_low"
+        if critical_high is not None and value > float(critical_high):
+            return "critical_high"
 
         if range_low is not None and value < float(range_low):
             return "below_range"
@@ -134,18 +135,17 @@ class ReferenceRangeService:
         return await self.lookup(parameter_name, sex, age, "indian")
 
     async def get_all_for_parameter(self, parameter_name: str) -> list[dict]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{self._base_url}/reference_ranges",
-                headers=self._headers,
-                params={
-                    "parameter_name": f"eq.{parameter_name.lower()}",
-                    "order": "sex,age_min",
-                },
+        try:
+            result = (
+                self._client.table("reference_ranges")
+                .select("*")
+                .eq("parameter_name", parameter_name.lower())
+                .order("sex")
+                .execute()
             )
-
-            if response.status_code == 200:
-                return response.json()
+            return result.data
+        except Exception as exc:
+            logger.error("reference_range_list_failed", error=str(exc))
             return []
 
     def clear_cache(self):

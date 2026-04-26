@@ -220,17 +220,56 @@ def _normalize_extraction(item: dict[str, Any], doc_type: DocumentType) -> dict:
 
     unit = item.get("unit") or item.get("units") or None
 
+    confidence = _compute_extraction_confidence(name, value, value_numeric, unit, item, doc_type)
+
     return {
         "name": str(name).lower().replace(" ", "_"),
         "value": value,
         "value_numeric": value_numeric,
         "unit": unit,
-        "confidence": 0.88,
-        "requires_manual_entry": False,
+        "confidence": confidence,
+        "requires_manual_entry": confidence < 0.70,
         "bounding_box": item.get("bounding_box"),
         "raw_ocr_output": str(item),
         "extraction_model": "anthropic-claude-sonnet",
     }
+
+
+def _compute_extraction_confidence(
+    name: str,
+    value: Any,
+    value_numeric: float | None,
+    unit: str | None,
+    raw_item: dict,
+    doc_type: DocumentType,
+) -> float:
+    score = 0.50
+
+    if name and name != "unknown_field":
+        score += 0.12
+
+    if value is not None and str(value).strip():
+        score += 0.12
+
+    if value_numeric is not None:
+        score += 0.08
+
+    if unit is not None:
+        score += 0.06
+
+    ref_low = raw_item.get("reference_range_low")
+    ref_high = raw_item.get("reference_range_high")
+    if ref_low is not None or ref_high is not None:
+        score += 0.06
+
+    if doc_type == DocumentType.LAB_REPORT:
+        if value_numeric is not None and unit:
+            score += 0.04
+
+    if raw_item.get("test_date") or raw_item.get("date"):
+        score += 0.02
+
+    return round(min(score, 0.98), 2)
 
 
 async def _extract_dicom_metadata(contents: bytes) -> list[dict]:

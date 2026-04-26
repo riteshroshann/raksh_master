@@ -229,6 +229,9 @@ async def chunked_upload_complete(request: ChunkUploadCompleteRequest) -> ChunkU
     content_hash = metadata["content_hash"]
     member_id = str(request.member_id)
 
+    audit_service = AuditService()
+    await audit_service.log_document_upload(ingest_id, "chunked_upload", member_id)
+
     db_service = DatabaseService()
     existing = await db_service.find_by_content_hash(content_hash, member_id)
     if existing:
@@ -238,17 +241,55 @@ async def chunked_upload_complete(request: ChunkUploadCompleteRequest) -> ChunkU
     storage_service = StorageService()
     storage_path = await storage_service.store_original(contents, metadata["filename"], member_id)
 
-    doc_type = await classify_document(contents, metadata["content_type"])
-    raw_extractions = await extract_fields(contents, doc_type)
+    try:
+        doc_type = await classify_document(contents, metadata["content_type"])
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Document classification failed: {str(exc)}")
+
+    try:
+        raw_extractions = await extract_fields(contents, doc_type)
+    except Exception as exc:
+        logger.error(
+            "chunked_extraction_failed_vlm_to_ocr_fallback",
+            ingest_id=ingest_id,
+            error=str(exc),
+            severity="ERROR",
+        )
+        raw_extractions = []
+
     scored_extractions = score_confidence(raw_extractions)
     validated_extractions = validate_before_save(scored_extractions, doc_type)
 
+    from pipeline.phi_deid import deid_pipeline
+
+    deidentified_extractions = []
+    phi_entities_found = 0
+    for extraction in validated_extractions:
+        cleaned, entities = deid_pipeline.deidentify_structured(extraction)
+        phi_entities_found += len(entities)
+        deidentified_extractions.append(cleaned)
+
+    if phi_entities_found > 0:
+        logger.warning(
+            "phi_detected_and_redacted_in_chunked_upload",
+            ingest_id=ingest_id,
+            phi_entities_redacted=phi_entities_found,
+        )
+
     chunked_upload_manager.cleanup(request.upload_id)
+
+    logger.info(
+        "chunked_ingest_completed",
+        ingest_id=ingest_id,
+        doc_type=doc_type.value,
+        num_fields=len(deidentified_extractions),
+        phi_redacted=phi_entities_found,
+    )
 
     return ChunkUploadCompleteResponse(
         storage_path=storage_path,
         doc_type=doc_type,
-        extractions=[ExtractedField(**f) for f in validated_extractions],
+        extractions=[ExtractedField(**f) for f in deidentified_extractions],
         requires_confirmation=True,
         ingest_id=ingest_id,
         content_hash=content_hash,
