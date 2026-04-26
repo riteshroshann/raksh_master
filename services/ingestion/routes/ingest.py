@@ -1,4 +1,5 @@
 import hashlib
+import time
 import uuid
 
 import structlog
@@ -7,6 +8,11 @@ from fastapi import APIRouter, HTTPException, UploadFile, Form
 from config import settings
 from models.enums import DocumentType, IngestChannel
 from models.schemas import (
+    ChunkUploadCompleteRequest,
+    ChunkUploadCompleteResponse,
+    ChunkUploadInitRequest,
+    ChunkUploadInitResponse,
+    ChunkUploadPartRequest,
     ConfirmationPayload,
     ConfirmationResponse,
     ExtractedField,
@@ -16,8 +22,10 @@ from pipeline.classifier import classify_document
 from pipeline.confidence import score_confidence
 from pipeline.extractor import extract_fields
 from pipeline.validator import validate_before_save
+from services.audit import AuditService
 from services.database import DatabaseService
 from services.storage import StorageService
+from services.chunked_upload import chunked_upload_manager
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/ingest")
@@ -40,6 +48,8 @@ async def ingest_upload(
     file: UploadFile,
     member_id: str = Form(...),
 ) -> UploadResponse:
+    start_time = time.monotonic()
+
     if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=415,
@@ -49,10 +59,7 @@ async def ingest_upload(
     contents = await file.read()
 
     if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB",
-        )
+        raise HTTPException(status_code=413, detail=f"File exceeds maximum size of {settings.max_upload_size_mb} MB")
 
     if len(contents) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -70,26 +77,39 @@ async def ingest_upload(
         channel=IngestChannel.UPLOAD.value,
     )
 
+    audit_service = AuditService()
+    await audit_service.log_document_upload(ingest_id, IngestChannel.UPLOAD.value, member_id)
+
     db_service = DatabaseService()
     existing = await db_service.find_by_content_hash(content_hash, member_id)
     if existing:
-        raise HTTPException(
-            status_code=409,
-            detail="Duplicate document detected. This file has already been ingested.",
-        )
+        await audit_service.log_duplicate_detected(content_hash, member_id)
+        raise HTTPException(status_code=409, detail="Duplicate document detected. This file has already been ingested.")
 
     storage_service = StorageService()
-    storage_path = await storage_service.store_original(
-        contents, file.filename or "unknown", member_id
-    )
+    storage_path = await storage_service.store_original(contents, file.filename or "unknown", member_id)
 
-    doc_type = await classify_document(contents, file.content_type or "application/octet-stream")
+    try:
+        doc_type = await classify_document(contents, file.content_type or "application/octet-stream")
+    except Exception as exc:
+        await audit_service.log_classification_failure(ingest_id, str(exc))
+        raise HTTPException(status_code=422, detail=f"Document classification failed: {str(exc)}")
 
-    raw_extractions = await extract_fields(contents, doc_type)
+    try:
+        raw_extractions = await extract_fields(contents, doc_type)
+        await audit_service.log_extraction(
+            ingest_id, doc_type.value,
+            raw_extractions[0].get("extraction_model", "unknown") if raw_extractions else "none",
+            len(raw_extractions),
+        )
+    except Exception as exc:
+        await audit_service.log_extraction_failure(ingest_id, "unknown", str(exc))
+        raw_extractions = []
 
     scored_extractions = score_confidence(raw_extractions)
-
     validated_extractions = validate_before_save(scored_extractions, doc_type)
+
+    elapsed_ms = (time.monotonic() - start_time) * 1000
 
     logger.info(
         "ingest_completed",
@@ -97,6 +117,7 @@ async def ingest_upload(
         doc_type=doc_type.value,
         num_fields=len(validated_extractions),
         channel=IngestChannel.UPLOAD.value,
+        duration_ms=round(elapsed_ms, 2),
     )
 
     return UploadResponse(
@@ -111,6 +132,8 @@ async def ingest_upload(
 
 @router.post("/confirm", response_model=ConfirmationResponse)
 async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
+    start_time = time.monotonic()
+
     logger.info(
         "confirmation_started",
         member_id=str(payload.member_id),
@@ -119,13 +142,19 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
     )
 
     db_service = DatabaseService()
+    audit_service = AuditService()
 
     document_id = await db_service.write_confirmed_document(payload)
+
+    await audit_service.log_confirmation(document_id, str(payload.member_id), len(payload.parameters))
+
+    elapsed_ms = (time.monotonic() - start_time) * 1000
 
     logger.info(
         "confirmation_completed",
         document_id=document_id,
         num_parameters=len(payload.parameters),
+        duration_ms=round(elapsed_ms, 2),
     )
 
     return ConfirmationResponse(
@@ -133,3 +162,76 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
         status="saved",
         parameters_saved=len(payload.parameters),
     )
+
+
+@router.post("/chunked/init", response_model=ChunkUploadInitResponse)
+async def chunked_upload_init(request: ChunkUploadInitRequest) -> ChunkUploadInitResponse:
+    result = chunked_upload_manager.init_upload(
+        filename=request.filename,
+        total_size_bytes=request.total_size_bytes,
+        total_chunks=request.total_chunks,
+        member_id=str(request.member_id),
+        content_type=request.content_type,
+    )
+
+    return ChunkUploadInitResponse(**result)
+
+
+@router.post("/chunked/part")
+async def chunked_upload_part(
+    file: UploadFile,
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+) -> dict:
+    chunk_data = await file.read()
+
+    try:
+        result = chunked_upload_manager.add_chunk(upload_id, chunk_index, chunk_data)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/chunked/complete", response_model=ChunkUploadCompleteResponse)
+async def chunked_upload_complete(request: ChunkUploadCompleteRequest) -> ChunkUploadCompleteResponse:
+    try:
+        contents, metadata = chunked_upload_manager.assemble(request.upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    ingest_id = str(uuid.uuid4())
+    content_hash = metadata["content_hash"]
+    member_id = str(request.member_id)
+
+    db_service = DatabaseService()
+    existing = await db_service.find_by_content_hash(content_hash, member_id)
+    if existing:
+        chunked_upload_manager.cleanup(request.upload_id)
+        raise HTTPException(status_code=409, detail="Duplicate document detected.")
+
+    storage_service = StorageService()
+    storage_path = await storage_service.store_original(contents, metadata["filename"], member_id)
+
+    doc_type = await classify_document(contents, metadata["content_type"])
+    raw_extractions = await extract_fields(contents, doc_type)
+    scored_extractions = score_confidence(raw_extractions)
+    validated_extractions = validate_before_save(scored_extractions, doc_type)
+
+    chunked_upload_manager.cleanup(request.upload_id)
+
+    return ChunkUploadCompleteResponse(
+        storage_path=storage_path,
+        doc_type=doc_type,
+        extractions=[ExtractedField(**f) for f in validated_extractions],
+        requires_confirmation=True,
+        ingest_id=ingest_id,
+        content_hash=content_hash,
+    )
+
+
+@router.get("/chunked/status/{upload_id}")
+async def chunked_upload_status(upload_id: str) -> dict:
+    status = chunked_upload_manager.get_upload_status(upload_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    return status

@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from functools import lru_cache
 
 
 class Settings(BaseSettings):
@@ -20,8 +21,27 @@ class Settings(BaseSettings):
     allowed_origins: str = Field(default="http://localhost:5173")
     max_upload_size_mb: int = Field(default=500)
     confidence_default_threshold: float = Field(default=0.85)
+    chunk_size_bytes: int = Field(default=5 * 1024 * 1024)
+    max_concurrent_extractions: int = Field(default=4)
+    patient_edit_rate_alert_threshold: float = Field(default=15.0)
+    fhir_server_url: str = Field(default="http://localhost:8080/fhir")
+    abdm_wrapper_url: str = Field(default="http://localhost:8090")
+    abdm_client_id: str = Field(default="")
+    abdm_client_secret: str = Field(default="")
+    pacs_server_url: str = Field(default="")
+    pacs_aet: str = Field(default="RAKSH")
+    orthanc_url: str = Field(default="http://localhost:8042")
+    sentry_dsn: str = Field(default="")
+    log_level: str = Field(default="INFO")
+    environment: str = Field(default="development")
+    data_region: str = Field(default="ap-south-1")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
-settings = Settings()
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
