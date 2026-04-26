@@ -139,7 +139,7 @@ python -m pytest tests/ -v --tb=short
 
 ## Releases
 
-- **v2.0.0** — Disease protocols, drug formulary, LOINC mapping, review queue, dev tooling
+- **v1.0.0** — Disease protocols, drug formulary, LOINC mapping, review queue, dev tooling
 - **v0.2.0** — Chunked upload PHI fix, signal-derived confidence, drug formulary
 - **v0.1.0** — PHI de-identification, supabase migration, clinical NLP
 
