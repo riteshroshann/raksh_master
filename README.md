@@ -1,3 +1,3 @@
 # RAKSH
 
-Coming soon.
+![Coming Soon](assets/coming_soon.png)
