@@ -262,3 +262,85 @@ async def abdm_consent_request(request: ABDMConsentRequest) -> ABDMConsentRespon
         status="REQUESTED",
         created_at=datetime.utcnow(),
     )
+
+
+@router.get("/reviews/pending")
+async def get_pending_reviews(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    priority: Optional[str] = None,
+    member_id: Optional[str] = None,
+) -> dict:
+    from services.review_queue import review_queue
+    reviews, total = review_queue.get_pending_reviews(page, page_size, priority, member_id)
+    return {"reviews": reviews, "total": total, "page": page, "page_size": page_size}
+
+
+@router.post("/reviews/{review_id}/approve")
+async def approve_review(review_id: str, reviewer_id: str = Query(...)) -> dict:
+    from services.review_queue import review_queue
+    result = review_queue.approve_review(review_id, reviewer_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    return {"status": "approved", "review_id": review_id}
+
+
+@router.post("/reviews/{review_id}/correct")
+async def correct_review(
+    review_id: str,
+    corrected_value: str = Query(...),
+    reviewer_id: str = Query(...),
+    corrected_value_numeric: Optional[float] = None,
+) -> dict:
+    from services.review_queue import review_queue
+    result = review_queue.correct_review(review_id, reviewer_id, corrected_value, corrected_value_numeric)
+    if not result:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    return {"status": "corrected", "review_id": review_id, "corrected_value": corrected_value}
+
+
+@router.post("/reviews/{review_id}/reject")
+async def reject_review(
+    review_id: str,
+    reviewer_id: str = Query(...),
+    reason: str = Query(default=""),
+) -> dict:
+    from services.review_queue import review_queue
+    result = review_queue.reject_review(review_id, reviewer_id, reason)
+    if not result:
+        raise HTTPException(status_code=404, detail="Review item not found")
+    return {"status": "rejected", "review_id": review_id}
+
+
+@router.get("/reviews/stats")
+async def get_review_stats() -> dict:
+    from services.review_queue import review_queue
+    return review_queue.get_review_stats()
+
+
+@router.post("/analyze/disease")
+async def analyze_disease_protocols(
+    parameters: list[dict],
+    sex: str = Query(default="any"),
+) -> dict:
+    from pipeline.disease_protocols import disease_engine
+    return disease_engine.full_analysis(parameters, sex=sex)
+
+
+@router.post("/analyze/prescription")
+async def analyze_prescription(medications: list[str]) -> dict:
+    from services.drug_formulary import drug_formulary
+    return drug_formulary.analyze_prescription(medications)
+
+
+@router.post("/analyze/interactions")
+async def check_drug_interactions(drug_names: list[str]) -> dict:
+    from services.drug_formulary import drug_formulary
+    interactions = drug_formulary.check_interactions(drug_names)
+    return {
+        "drug_names": drug_names,
+        "interactions": interactions,
+        "total_interactions": len(interactions),
+        "has_critical": any(i["severity"] == "critical" for i in interactions),
+    }
+

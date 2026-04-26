@@ -134,6 +134,15 @@ async def ingest_upload(
             phi_entities_redacted=phi_entities_found,
         )
 
+    from services.review_queue import review_queue
+    review_queue.queue_low_confidence_extractions(
+        ingest_id=ingest_id,
+        document_id=None,
+        member_id=member_id,
+        extractions=deidentified_extractions,
+        threshold=0.70,
+    )
+
     elapsed_ms = (time.monotonic() - start_time) * 1000
 
     logger.info(
@@ -170,6 +179,69 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
     db_service = DatabaseService()
     audit_service = AuditService()
 
+    member = await db_service.get_member(str(payload.member_id))
+    member_sex = member.get("sex", "any") if member else "any"
+    member_dob = None
+    if member and member.get("dob"):
+        from datetime import date as date_type
+        try:
+            if isinstance(member["dob"], str):
+                member_dob = date_type.fromisoformat(member["dob"])
+            else:
+                member_dob = member["dob"]
+        except (ValueError, TypeError):
+            pass
+
+    from services.reference_ranges import ReferenceRangeEnrichmentService
+    enrichment_service = ReferenceRangeEnrichmentService()
+
+    param_dicts = [p.model_dump() for p in payload.parameters]
+    enriched_params = await enrichment_service.enrich_parameters(param_dicts, member_sex, member_dob)
+
+    for i, enriched in enumerate(enriched_params):
+        if enriched.get("indian_range_low") is not None:
+            payload.parameters[i].indian_range_low = enriched["indian_range_low"]
+        if enriched.get("indian_range_high") is not None:
+            payload.parameters[i].indian_range_high = enriched["indian_range_high"]
+        if enriched.get("flag"):
+            from models.enums import ParameterFlag
+            try:
+                payload.parameters[i].flag = ParameterFlag(enriched["flag"])
+            except ValueError:
+                pass
+
+    from pipeline.disease_protocols import disease_engine
+    analysis = disease_engine.full_analysis(enriched_params, sex=member_sex)
+
+    if analysis["has_critical"]:
+        logger.error(
+            "critical_findings_on_confirmation",
+            member_id=str(payload.member_id),
+            doc_type=payload.doc_type.value,
+            critical_count=analysis["critical_findings"],
+            categories=analysis["detected_categories"],
+        )
+
+    if analysis["co_monitoring_gaps"]:
+        logger.warning(
+            "co_monitoring_gaps_detected",
+            member_id=str(payload.member_id),
+            gaps=[g["reason"] for g in analysis["co_monitoring_gaps"]],
+        )
+
+    if payload.doc_type.value == "prescription":
+        from services.drug_formulary import drug_formulary
+        med_names = [p.parameter_name for p in payload.parameters if "medication" in p.parameter_name.lower() or "drug" in p.parameter_name.lower()]
+        med_texts = [p.value_text or p.parameter_name for p in payload.parameters]
+        rx_analysis = drug_formulary.analyze_prescription(med_texts)
+
+        if rx_analysis["has_critical_warnings"]:
+            logger.error(
+                "critical_prescription_warnings",
+                member_id=str(payload.member_id),
+                warnings=[w["message"] for w in rx_analysis["warnings"] if w["severity"] == "critical"],
+            )
+
     document_id = await db_service.write_confirmed_document(payload)
 
     await audit_service.log_confirmation(document_id, str(payload.member_id), len(payload.parameters))
@@ -181,6 +253,8 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
         document_id=document_id,
         num_parameters=len(payload.parameters),
         duration_ms=round(elapsed_ms, 2),
+        disease_categories=analysis.get("detected_categories", []),
+        critical_findings=analysis.get("critical_findings", 0),
     )
 
     return ConfirmationResponse(

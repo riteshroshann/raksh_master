@@ -1,0 +1,58 @@
+version: "3.9"
+
+# Development-only compose — no GCP creds, no SSL, no nginx
+# Usage: docker compose -f docker-compose.dev.yml up --build
+
+services:
+  ingestion:
+    build:
+      context: ./services/ingestion
+      dockerfile: Dockerfile
+    container_name: raksh-ingestion-dev
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - EXTRACTION_BACKEND=api
+      - GOOGLE_APPLICATION_CREDENTIALS=
+    volumes:
+      - ./watch:/watch
+      - ./services/ingestion:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+    networks:
+      - raksh-dev
+
+  orthanc:
+    image: jodogne/orthanc:latest
+    container_name: raksh-orthanc-dev
+    restart: unless-stopped
+    ports:
+      - "8042:8042"
+      - "4242:4242"
+    volumes:
+      - orthanc-dev-data:/var/lib/orthanc/db
+    environment:
+      ORTHANC__REGISTERED_USERS: '{"raksh": "dev-orthanc-secret"}'
+    networks:
+      - raksh-dev
+
+volumes:
+  orthanc-dev-data:
+
+networks:
+  raksh-dev:
+    driver: bridge

@@ -29,7 +29,7 @@ logger = structlog.get_logger()
 app = FastAPI(
     title="Raksh Ingestion Service",
     description="Medical document ingestion, classification, extraction, and confidence scoring pipeline. HIPAA/DPDP Act 2023 compliant.",
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -77,7 +77,7 @@ async def request_logging_middleware(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Response-Time-Ms"] = str(round(duration_ms, 2))
     response.headers["X-Service"] = "raksh-ingestion"
-    response.headers["X-Version"] = "1.0.0"
+    response.headers["X-Version"] = "2.0.0"
 
     return response
 
