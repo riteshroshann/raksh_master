@@ -4,8 +4,6 @@ clinical document ingestion backend. takes medical documents (lab reports, presc
 
 built for indian healthcare. hipaa and dpdp act 2023 compliant.
 
-![Coming Soon](assets/Coming%20soon....png)
-
 ## quickstart
 
 ```bash
