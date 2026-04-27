@@ -5,7 +5,12 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from middleware.auth import ApiKeyMiddleware
+from middleware.auth import (
+    ApiKeyMiddleware,
+    RateLimitMiddleware,
+    RequestValidationMiddleware,
+    SecurityHeadersMiddleware,
+)
 from routes.health import router as health_router
 from routes.ingest import router as ingest_router
 
@@ -94,10 +99,57 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-Response-Time-Ms"],
 )
 
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, max_requests=100, window_seconds=60)
+app.add_middleware(RequestValidationMiddleware)
 app.add_middleware(ApiKeyMiddleware)
 
 app.include_router(health_router)
 app.include_router(ingest_router)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Never leak internal details to the client."""
+    import traceback
+    logger.error(
+        "unhandled_exception",
+        method=request.method,
+        path=str(request.url.path),
+        error_type=type(exc).__name__,
+        error=str(exc),
+        traceback=traceback.format_exc(),
+    )
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": "An unexpected error occurred. This incident has been logged.",
+        },
+    )
+
+
+from pydantic import ValidationError
+
+@app.exception_handler(ValidationError)
+async def validation_exception_handler(request: Request, exc: ValidationError):
+    logger.warning(
+        "validation_error",
+        path=str(request.url.path),
+        errors=exc.error_count(),
+    )
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Validation error",
+            "detail": [
+                {"field": e.get("loc", [])[-1] if e.get("loc") else "unknown", "message": e.get("msg", "")}
+                for e in exc.errors()
+            ],
+        },
+    )
 
 
 @app.on_event("startup")

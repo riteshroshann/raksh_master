@@ -18,6 +18,11 @@ class DatabaseService:
     def __init__(self):
         self._client: Client = _get_client()
 
+    async def health_ping(self) -> bool:
+        """Lightweight connectivity check. Raises on failure."""
+        self._client.table("documents").select("id").limit(1).execute()
+        return True
+
     async def find_by_content_hash(self, content_hash: str, member_id: str) -> Optional[dict]:
         try:
             result = (

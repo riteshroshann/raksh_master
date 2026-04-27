@@ -119,6 +119,7 @@ class HealthResponse(BaseModel):
     version: str = "1.0.0"
     environment: str = "development"
     uptime_seconds: float = 0.0
+    database: str = "unknown"
 
 
 class ErrorResponse(BaseModel):

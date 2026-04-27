@@ -27,6 +27,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN useradd --create-home --shell /bin/bash raksh && \
+    chown -R raksh:raksh /app
+
+USER raksh
+
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata

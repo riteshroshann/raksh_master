@@ -47,12 +47,22 @@ SERVICE_START_TIME = time.time()
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
+    db_ok = False
+    try:
+        db_service = DatabaseService()
+        # lightweight connectivity check — no data returned
+        await db_service.health_ping()
+        db_ok = True
+    except Exception:
+        pass
+
     return HealthResponse(
-        status="healthy",
+        status="healthy" if db_ok else "degraded",
         service="raksh-ingestion",
         version="1.0.0",
         environment=settings.environment,
         uptime_seconds=round(time.time() - SERVICE_START_TIME, 2),
+        database="connected" if db_ok else "unreachable",
     )
 
 
