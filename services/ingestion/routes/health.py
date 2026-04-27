@@ -317,30 +317,3 @@ async def get_review_stats() -> dict:
     from services.review_queue import review_queue
     return review_queue.get_review_stats()
 
-
-@router.post("/analyze/disease")
-async def analyze_disease_protocols(
-    parameters: list[dict],
-    sex: str = Query(default="any"),
-) -> dict:
-    from pipeline.disease_protocols import disease_engine
-    return disease_engine.full_analysis(parameters, sex=sex)
-
-
-@router.post("/analyze/prescription")
-async def analyze_prescription(medications: list[str]) -> dict:
-    from services.drug_formulary import drug_formulary
-    return drug_formulary.analyze_prescription(medications)
-
-
-@router.post("/analyze/interactions")
-async def check_drug_interactions(drug_names: list[str]) -> dict:
-    from services.drug_formulary import drug_formulary
-    interactions = drug_formulary.check_interactions(drug_names)
-    return {
-        "drug_names": drug_names,
-        "interactions": interactions,
-        "total_interactions": len(interactions),
-        "has_critical": any(i["severity"] == "critical" for i in interactions),
-    }
-

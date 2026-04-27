@@ -77,43 +77,57 @@ async def _extract_via_anthropic(contents: bytes, doc_type: DocumentType) -> tup
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
+    _confidence_instruction = (
+        " For each field, include a 'confidence' score from 0.0 to 1.0 reflecting "
+        "how clearly the value was visible and readable in the document. "
+        "If you cannot clearly read a value, return null for that field rather than guessing. "
+        "Do not infer or guess any values not clearly visible."
+    )
+
     extraction_prompts = {
         DocumentType.LAB_REPORT: (
             "Extract all lab test parameters from this medical lab report. "
             "For each parameter, return: parameter_name, value (numeric if applicable), unit, "
-            "reference_range_low, reference_range_high, and the test_date. "
-            "Return as a JSON array of objects. Do not infer or guess any values not clearly visible."
+            "reference_range_low, reference_range_high, test_date, and confidence."
+            + _confidence_instruction
+            + " Return as a JSON array of objects."
         ),
         DocumentType.PRESCRIPTION: (
             "Extract all medications from this prescription. "
             "For each medication, return: medication_name, dosage, frequency, duration, "
-            "and prescribing_doctor. Flag any ambiguous abbreviations especially U for units. "
-            "Return as a JSON array. Do not infer values not clearly visible."
+            "prescribing_doctor, and confidence. Flag any ambiguous abbreviations especially U for units."
+            + _confidence_instruction
+            + " Return as a JSON array."
         ),
         DocumentType.DISCHARGE_SUMMARY: (
             "Extract from this discharge summary: diagnosis, treatment_received, "
             "medications_at_discharge (as array), follow_up_instructions, "
-            "attending_doctor, admission_date, discharge_date. "
-            "Return as JSON. Do not infer values not clearly visible."
+            "attending_doctor, admission_date, discharge_date. Include confidence per field."
+            + _confidence_instruction
+            + " Return as JSON."
         ),
         DocumentType.DOCTOR_NOTES: (
             "Extract from these clinical notes: chief_complaint, history, "
-            "examination_findings, assessment, plan, doctor_name, date. "
-            "Return as JSON. Do not infer values not clearly visible."
+            "examination_findings, assessment, plan, doctor_name, date. Include confidence per field."
+            + _confidence_instruction
+            + " Return as JSON."
         ),
         DocumentType.PATHOLOGY_REPORT: (
             "Extract from this pathology report: specimen_type, gross_findings, "
-            "microscopic_findings, diagnosis, staging (if present), doctor_name. "
-            "Return as JSON. Do not infer values not clearly visible."
+            "microscopic_findings, diagnosis, staging (if present), doctor_name. Include confidence per field."
+            + _confidence_instruction
+            + " Return as JSON."
         ),
         DocumentType.REFERRAL_LETTER: (
-            "Extract: referring_doctor, target_specialty, indication, patient_name, date. "
-            "Return as JSON. Do not infer values not clearly visible."
+            "Extract: referring_doctor, target_specialty, indication, patient_name, date. Include confidence per field."
+            + _confidence_instruction
+            + " Return as JSON."
         ),
         DocumentType.INSURANCE_BILLING: (
             "Extract: claim_number, policy_number, patient_name, diagnosis, "
-            "procedure, amount, provider_name. "
-            "Return as JSON. Do not infer values not clearly visible."
+            "procedure, amount, provider_name. Include confidence per field."
+            + _confidence_instruction
+            + " Return as JSON."
         ),
     }
 
@@ -220,9 +234,24 @@ def _normalize_extraction(item: dict[str, Any], doc_type: DocumentType) -> dict:
 
     unit = item.get("unit") or item.get("units") or None
 
+    original_value = value
+    original_unit = unit
+    unit_converted = False
+
+    if value_numeric is not None and unit:
+        from pipeline.unit_normaliser import normalise_unit
+        norm = normalise_unit(name, value_numeric, unit)
+        if norm["was_converted"]:
+            value_numeric = norm["value"]
+            value = str(norm["value"])
+            unit = norm["unit"]
+            original_value = str(norm["original_value"])
+            original_unit = norm["original_unit"]
+            unit_converted = True
+
     confidence = _compute_extraction_confidence(name, value, value_numeric, unit, item, doc_type)
 
-    return {
+    result = {
         "name": str(name).lower().replace(" ", "_"),
         "value": value,
         "value_numeric": value_numeric,
@@ -234,6 +263,13 @@ def _normalize_extraction(item: dict[str, Any], doc_type: DocumentType) -> dict:
         "extraction_model": "anthropic-claude-sonnet",
     }
 
+    if unit_converted:
+        result["original_value"] = original_value
+        result["original_unit"] = original_unit
+        result["unit_converted"] = True
+
+    return result
+
 
 def _compute_extraction_confidence(
     name: str,
@@ -243,6 +279,25 @@ def _compute_extraction_confidence(
     raw_item: dict,
     doc_type: DocumentType,
 ) -> float:
+    # Primary signal: model-reported confidence.
+    # The extraction prompt explicitly asks the VLM for a per-field confidence
+    # score reflecting how clearly the value was readable in the document.
+    # This is the only signal that actually measures OCR/reading accuracy.
+    model_confidence = raw_item.get("confidence")
+    if model_confidence is not None:
+        try:
+            mc = float(model_confidence)
+            if 0.0 <= mc <= 1.0:
+                return round(mc, 2)
+        except (ValueError, TypeError):
+            pass
+
+    # Fallback: field-completeness heuristic.
+    # This does NOT measure reading accuracy. It measures whether the model
+    # returned structured fields. A hallucinated value scores the same as a
+    # correctly read one. This fallback exists only for backward compatibility
+    # with extraction backends that don't report confidence (e.g. Tesseract
+    # raw field mode, older prompt versions).
     score = 0.50
 
     if name and name != "unknown_field":

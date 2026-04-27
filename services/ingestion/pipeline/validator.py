@@ -73,6 +73,12 @@ def validate_before_save(extractions: list[dict], doc_type: DocumentType) -> lis
             "raw_ocr_output": field.get("raw_ocr_output"),
             "extraction_model": field.get("extraction_model"),
         }
+
+        for key in ("original_value", "original_unit", "unit_converted",
+                     "loinc_code", "loinc_name", "loinc_component", "loinc_system"):
+            if key in field:
+                clean_field[key] = field[key]
+
         result.append(clean_field)
 
     logger.info(

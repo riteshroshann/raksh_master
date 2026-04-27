@@ -35,6 +35,9 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+from middleware.constitutional_filter import ConstitutionalFilterMiddleware
+app.add_middleware(ConstitutionalFilterMiddleware)
+
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):

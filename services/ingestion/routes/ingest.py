@@ -6,7 +6,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, UploadFile, Form
 
 from config import settings
-from models.enums import DocumentType, IngestChannel
+from models.enums import DocumentType, FastingStatus, IngestChannel
 from models.schemas import (
     ChunkUploadCompleteRequest,
     ChunkUploadCompleteResponse,
@@ -210,37 +210,21 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
             except ValueError:
                 pass
 
-    from pipeline.disease_protocols import disease_engine
-    analysis = disease_engine.full_analysis(enriched_params, sex=member_sex)
+    fasting_violations = []
+    for param in payload.parameters:
+        range_info = enriched_params[payload.parameters.index(param)] if payload.parameters.index(param) < len(enriched_params) else {}
+        if range_info.get("fasting_required") and param.fasting_status in (None, FastingStatus.UNKNOWN):
+            fasting_violations.append(param.parameter_name)
 
-    if analysis["has_critical"]:
-        logger.error(
-            "critical_findings_on_confirmation",
-            member_id=str(payload.member_id),
-            doc_type=payload.doc_type.value,
-            critical_count=analysis["critical_findings"],
-            categories=analysis["detected_categories"],
+    if fasting_violations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "fasting_status_required",
+                "message": "Fasting status must be confirmed for these parameters",
+                "affected_parameters": fasting_violations,
+            },
         )
-
-    if analysis["co_monitoring_gaps"]:
-        logger.warning(
-            "co_monitoring_gaps_detected",
-            member_id=str(payload.member_id),
-            gaps=[g["reason"] for g in analysis["co_monitoring_gaps"]],
-        )
-
-    if payload.doc_type.value == "prescription":
-        from services.drug_formulary import drug_formulary
-        med_names = [p.parameter_name for p in payload.parameters if "medication" in p.parameter_name.lower() or "drug" in p.parameter_name.lower()]
-        med_texts = [p.value_text or p.parameter_name for p in payload.parameters]
-        rx_analysis = drug_formulary.analyze_prescription(med_texts)
-
-        if rx_analysis["has_critical_warnings"]:
-            logger.error(
-                "critical_prescription_warnings",
-                member_id=str(payload.member_id),
-                warnings=[w["message"] for w in rx_analysis["warnings"] if w["severity"] == "critical"],
-            )
 
     document_id = await db_service.write_confirmed_document(payload)
 
@@ -253,8 +237,6 @@ async def ingest_confirm(payload: ConfirmationPayload) -> ConfirmationResponse:
         document_id=document_id,
         num_parameters=len(payload.parameters),
         duration_ms=round(elapsed_ms, 2),
-        disease_categories=analysis.get("detected_categories", []),
-        critical_findings=analysis.get("critical_findings", 0),
     )
 
     return ConfirmationResponse(

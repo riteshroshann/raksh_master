@@ -27,20 +27,28 @@ docker compose -f docker-compose.dev.yml up --build
 
 1. **ingestion** — upload a pdf/image, it gets classified (lab report, prescription, etc.) and extracted into structured json using claude sonnet as a vlm. tesseract 5 as fallback.
 
-2. **phi de-identification** — all extractions pass through presidio + regex before anything is stored. aadhaar, pan, abha, phone, email — redacted before persistence.
+2. **phi de-identification** — all documents pass through presidio + regex before anything is stored. aadhaar, pan, abha, phone, email — redacted before persistence.
 
-3. **confidence scoring** — each extracted field gets a signal-derived confidence score (0.50-0.98) based on field completeness, numeric parseability, unit presence, reference ranges. low-confidence fields get routed to a human review queue.
+3. **unit normalisation** — indian labs report in mixed units (mmol/L, µmol/L, mg/dL). all values are normalised to conventional units for consistent storage and trend comparison. originals preserved.
 
-4. **clinical intelligence** — on confirmation, parameters are enriched with indian population reference ranges, interpreted through disease-specific protocols (diabetes staging, ckd staging, cardiac markers, etc.), and checked for drug interactions if it's a prescription.
+4. **confidence scoring** — each extracted field gets a signal-derived confidence score. low-confidence fields get routed to a human review queue. high-risk medications (insulin, warfarin) require 0.99 confidence.
 
-5. **interop** — fhir r4 bundle export, abdm/abha integration, loinc coding for 90+ parameters.
+5. **constitutional filter** — output-layer middleware scans all api responses for prohibited diagnostic terms. the system is architecturally incapable of producing diagnostic strings in patient-facing context.
+
+6. **fasting enforcement** — parameters requiring fasting status (lipids, glucose) block save if fasting status is not confirmed. 422 with affected parameter list.
+
+7. **reference range enrichment** — indian population-specific ranges (icmr/api india citations) auto-applied on confirmation. critical/normal flagging.
+
+8. **interop** — fhir r4 bundle export, abdm/abha integration, loinc coding for 90+ parameters.
 
 ## architecture
 
 ```
-document in -> phi deid -> classify -> extract (vlm) -> confidence score -> review queue
-                                                                              |
-                                                            confirm -> enrich ranges -> disease protocols -> store
+document in -> phi deid -> classify -> extract (vlm) -> unit normalise -> confidence score -> review queue
+                                                                                                |
+                                                                  confirm -> enrich ranges -> fasting check -> store
+                                                                                                |
+                                                                                    constitutional filter (output)
 ```
 
 ## key files
@@ -50,20 +58,24 @@ services/ingestion/
   main.py                          # fastapi app
   config.py                        # env-based settings
   routes/ingest.py                 # upload, confirm, chunked upload
-  routes/health.py                 # health, metrics, documents, reviews, analysis
+  routes/health.py                 # health, metrics, documents, reviews
   pipeline/
     extractor.py                   # vlm extraction + confidence scoring
     classifier.py                  # document type classification
-    clinical_nlp.py                # negation/uncertainty detection (context engine)
-    disease_protocols.py           # diabetes/thyroid/ckd/cardiac/anemia/liver interpretation
+    clinical_nlp.py                # negation/uncertainty detection
+    unit_normaliser.py             # mmol/L -> mg/dL, µmol/L -> mg/dL
     phi_deid.py                    # presidio + regex de-identification
     confidence.py                  # field-level confidence thresholds
+    validator.py                   # prohibited content filter + field validation
+  middleware/
+    constitutional_filter.py       # output-layer diagnostic term filter
+    auth.py                        # api key authentication
   services/
     database.py                    # supabase-py typed client
-    drug_formulary.py              # 40 drugs, 10 interactions, dose validation
     loinc_mapping.py               # 90+ loinc codes, fhir coding
     reference_ranges.py            # indian population ranges + flagging
     review_queue.py                # human-in-the-loop verification
+    drug_formulary.py              # 40 drugs, interactions, dose validation
     fhir_mapper.py                 # fhir r4 bundle generation
     audit.py                       # audit logging
     consent.py                     # dpdp act consent + right to erasure
@@ -75,7 +87,6 @@ supabase/migrations/               # 8 migrations
 ```bash
 cd services/ingestion
 python -m pytest tests/ -v --tb=short
-# 261 tests
 ```
 
 ## api
@@ -86,17 +97,17 @@ the important ones:
 
 ```
 POST /ingest/upload              # upload a document
-POST /ingest/confirm             # confirm extracted parameters
-POST /analyze/disease            # disease protocol analysis
-POST /analyze/prescription       # prescription safety check
-POST /analyze/interactions       # drug-drug interactions
+POST /ingest/confirm             # confirm extracted parameters (fasting enforced)
 GET  /reviews/pending            # human review queue
+POST /reviews/{id}/approve       # approve extraction
+POST /reviews/{id}/correct       # correct extraction
 GET  /parameters/trend           # parameter trend over time
+GET  /reference-ranges/lookup    # indian reference range lookup
 GET  /fhir/bundle/{id}           # fhir r4 export
 ```
 
 ## releases
 
-- v1.0.0 — disease protocols, loinc, review queue, drug formulary, dev tooling
+- v1.0.0 — unit normalisation, constitutional filter, fasting enforcement, review queue, loinc
 - v0.2.0 — chunked upload phi fix, signal-derived confidence, drug formulary
 - v0.1.0 — phi de-identification, supabase migration, clinical nlp
