@@ -1,7 +1,6 @@
 ALTER TABLE family_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE report_parameters ENABLE ROW LEVEL SECURITY;
-ALTER TABLE consent_records ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY select_own_members ON family_members
     FOR SELECT USING (account_id = auth.uid());
@@ -43,11 +42,3 @@ CREATE POLICY insert_own_parameters ON report_parameters
         )
     );
 
-CREATE POLICY select_own_consent ON consent_records
-    FOR SELECT USING (account_id = auth.uid());
-
-CREATE POLICY insert_own_consent ON consent_records
-    FOR INSERT WITH CHECK (account_id = auth.uid());
-
-CREATE POLICY update_own_consent ON consent_records
-    FOR UPDATE USING (account_id = auth.uid());

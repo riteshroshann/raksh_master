@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Raksh — clinical document ingestion and lab parameter tracking">
+  <title>Raksh</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header id="header">
+    <div class="header-left">
+      <h1 class="logo">raksh</h1>
+      <span class="logo-sub">clinical ingestion</span>
+    </div>
+    <div class="header-right">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text" class="status-text">connecting</span>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- Upload Section -->
+    <section id="section-upload" class="section active">
+      <div class="section-header">
+        <h2>Upload</h2>
+        <p class="section-desc">Drop a lab report, prescription, or discharge summary.</p>
+      </div>
+
+      <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload a document">
+        <div class="drop-zone-inner">
+          <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span class="drop-text">Choose file or drag here</span>
+          <span class="drop-hint">PDF, JPEG, PNG, TIFF — up to 500 MB</span>
+        </div>
+        <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png,.tiff,.tif,.heic" hidden>
+      </div>
+
+      <div id="upload-progress" class="upload-progress hidden">
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="progress-text" class="progress-text">Uploading...</span>
+      </div>
+    </section>
+
+    <!-- Results Section -->
+    <section id="section-results" class="section hidden">
+      <div class="section-header">
+        <h2>Extracted</h2>
+        <div class="result-meta">
+          <span id="result-doc-type" class="badge"></span>
+          <span id="result-count" class="badge badge-outline"></span>
+        </div>
+      </div>
+
+      <div id="results-table-wrap" class="table-wrap">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Value</th>
+              <th>Unit</th>
+              <th>Confidence</th>
+              <th>Flag</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+
+      <div class="confirm-bar">
+        <div class="fasting-toggle">
+          <label for="fasting-select">Fasting status</label>
+          <select id="fasting-select">
+            <option value="unknown">Unknown</option>
+            <option value="fasting">Fasting</option>
+            <option value="non_fasting">Non-fasting</option>
+          </select>
+        </div>
+        <button id="btn-confirm" class="btn btn-primary">Confirm &amp; Save</button>
+        <button id="btn-discard" class="btn btn-ghost">Discard</button>
+      </div>
+
+      <div id="confirm-error" class="error-box hidden"></div>
+      <div id="confirm-success" class="success-box hidden"></div>
+    </section>
+
+    <!-- Documents Section -->
+    <section id="section-documents" class="section">
+      <div class="section-header">
+        <h2>Documents</h2>
+        <button id="btn-refresh-docs" class="btn btn-ghost btn-sm">Refresh</button>
+      </div>
+
+      <div id="docs-empty" class="empty-state">
+        <p>No confirmed documents yet.</p>
+      </div>
+
+      <div id="docs-list" class="docs-list hidden"></div>
+    </section>
+
+    <!-- Trend Section -->
+    <section id="section-trend" class="section hidden">
+      <div class="section-header">
+        <h2 id="trend-title">Trend</h2>
+        <button id="btn-close-trend" class="btn btn-ghost btn-sm">Close</button>
+      </div>
+      <canvas id="trend-canvas" width="800" height="320"></canvas>
+      <div id="trend-legend" class="trend-legend"></div>
+    </section>
+
+  </main>
+
+  <footer id="footer">
+    <span class="footer-text">raksh v1.0.0</span>
+    <span class="footer-sep">·</span>
+    <span class="footer-text">HIPAA / DPDP Act 2023</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS audit_log (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event VARCHAR(100) NOT NULL,
     account_id UUID,
     details JSONB,
@@ -20,7 +20,7 @@ REVOKE UPDATE ON audit_log FROM PUBLIC;
 REVOKE DELETE ON audit_log FROM PUBLIC;
 
 CREATE TABLE IF NOT EXISTS metrics_snapshots (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
     total_ingestions INT NOT NULL DEFAULT 0,
     total_confirmations INT NOT NULL DEFAULT 0,

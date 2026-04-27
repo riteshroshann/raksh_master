@@ -5,20 +5,19 @@
 
 create or replace view v_parameter_trend as
 select
-  cp.id as parameter_id,
-  d.member_id,
-  cp.parameter_name,
-  cp.value_numeric,
-  cp.unit,
-  cp.flag,
-  cp.original_value,
-  cp.original_unit,
-  cp.fasting_status,
-  d.test_date,
+  rp.id as parameter_id,
+  rp.member_id,
+  rp.parameter_name,
+  rp.value_numeric,
+  rp.unit,
+  rp.flag,
+  rp.value_text,
+  rp.fasting_status,
+  rp.test_date,
   d.confirmed_at,
 
   -- age at the time of the test, not current age
-  extract(year from age(d.test_date, m.dob))::int as age_at_test,
+  extract(year from age(rp.test_date, m.dob))::int as age_at_test,
 
   -- contextual reference range: uses the patient's age at each test date
   rr.range_low,
@@ -26,17 +25,17 @@ select
   rr.critical_low,
   rr.critical_high,
   rr.source,
-  rr.citation,
+  rr.source_citation,
   rr.fasting_required,
 
   -- re-derive flag from contextual range (may differ from stored flag
   -- if ranges were updated since original confirmation)
   case
-    when cp.value_numeric is null then null
-    when rr.critical_low is not null and cp.value_numeric < rr.critical_low then 'critical_low'
-    when rr.critical_high is not null and cp.value_numeric > rr.critical_high then 'critical_high'
-    when rr.range_low is not null and cp.value_numeric < rr.range_low then 'below_range'
-    when rr.range_high is not null and cp.value_numeric > rr.range_high then 'above_range'
+    when rp.value_numeric is null then null
+    when rr.critical_low is not null and rp.value_numeric < rr.critical_low then 'critical_low'
+    when rr.critical_high is not null and rp.value_numeric > rr.critical_high then 'critical_high'
+    when rr.range_low is not null and rp.value_numeric < rr.range_low then 'below_range'
+    when rr.range_high is not null and rp.value_numeric > rr.range_high then 'above_range'
     when rr.range_low is not null and rr.range_high is not null then 'normal'
     else null
   end as contextual_flag,
@@ -45,14 +44,14 @@ select
   -- fasting status was not confirmed as fasting
   case
     when rr.fasting_required = true
-      and (cp.fasting_status is null or cp.fasting_status != 'fasting')
+      and (rp.fasting_status is null or rp.fasting_status != 'fasting')
     then true
     else false
   end as fasting_warning
 
-from confirmed_parameters cp
-join documents d on cp.document_id = d.id
-join members m on d.member_id = m.id
+from report_parameters rp
+join documents d on rp.document_id = d.id
+join family_members m on rp.member_id = m.id
 left join lateral (
   select
     r.range_low,
@@ -60,21 +59,21 @@ left join lateral (
     r.critical_low,
     r.critical_high,
     r.source,
-    r.citation,
+    r.source_citation,
     r.fasting_required
   from reference_ranges r
-  where lower(r.parameter_name) = lower(cp.parameter_name)
+  where lower(r.parameter_name) = lower(rp.parameter_name)
     and (r.sex = m.sex or r.sex = 'any')
     and (
       r.age_min is null
-      or extract(year from age(d.test_date, m.dob))::int >= r.age_min
+      or extract(year from age(rp.test_date, m.dob))::int >= r.age_min
     )
     and (
       r.age_max is null
-      or extract(year from age(d.test_date, m.dob))::int <= r.age_max
+      or extract(year from age(rp.test_date, m.dob))::int <= r.age_max
     )
-    and r.effective_from <= d.test_date
-    and (r.effective_to is null or r.effective_to > d.test_date)
+    and r.effective_from <= rp.test_date
+    and (r.effective_to is null or r.effective_to > rp.test_date)
   order by
     -- prefer indian ranges (source = 'indian')
     case when r.source = 'indian' then 0 else 1 end,
@@ -86,10 +85,7 @@ left join lateral (
   limit 1
 ) rr on true
 where d.confirmed_at is not null
-order by d.member_id, cp.parameter_name, d.test_date;
-
--- enable RLS
-alter view v_parameter_trend owner to authenticated;
+order by rp.member_id, rp.parameter_name, rp.test_date;
 
 comment on view v_parameter_trend is
   'Trend view: returns all confirmed parameter values for a member with '

@@ -1,7 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE IF NOT EXISTS family_members (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL,
     name VARCHAR(255) NOT NULL,
     dob DATE NOT NULL,
@@ -22,7 +22,7 @@ CREATE INDEX idx_family_members_account ON family_members(account_id);
 CREATE INDEX idx_family_members_abha ON family_members(abha_id) WHERE abha_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS documents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     member_id UUID NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
     ingest_channel VARCHAR(20) NOT NULL CHECK (ingest_channel IN (
         'upload', 'folder_watch', 'email', 'fax', 'scanner', 'emr_ehr', 'pacs', 'hl7', 'abdm'
@@ -67,7 +67,7 @@ CREATE INDEX idx_documents_created ON documents(created_at DESC);
 CREATE INDEX idx_documents_doc_date ON documents(doc_date DESC) WHERE doc_date IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS report_parameters (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     member_id UUID NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
     parameter_name VARCHAR(100) NOT NULL,

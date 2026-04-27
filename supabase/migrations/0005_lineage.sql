@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS extraction_lineage (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     parameter_id UUID NOT NULL REFERENCES report_parameters(id) ON DELETE CASCADE,
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     extraction_model VARCHAR(100) NOT NULL,
@@ -26,7 +26,7 @@ CREATE INDEX idx_lineage_edited ON extraction_lineage(patient_edited) WHERE pati
 CREATE INDEX idx_lineage_created ON extraction_lineage(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
     ingest_id VARCHAR(36) NOT NULL,
     channel VARCHAR(20) NOT NULL,
@@ -57,7 +57,7 @@ CREATE INDEX idx_pipeline_runs_channel ON pipeline_runs(channel);
 CREATE INDEX idx_pipeline_runs_created ON pipeline_runs(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS abdm_links (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     member_id UUID NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
     abha_id VARCHAR(14) NOT NULL,
     health_id VARCHAR(255),
@@ -73,7 +73,7 @@ CREATE INDEX idx_abdm_links_member ON abdm_links(member_id);
 CREATE INDEX idx_abdm_links_abha ON abdm_links(abha_id);
 
 CREATE TABLE IF NOT EXISTS notification_preferences (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL,
     notify_on_extraction BOOLEAN NOT NULL DEFAULT TRUE,
     notify_on_critical BOOLEAN NOT NULL DEFAULT TRUE,

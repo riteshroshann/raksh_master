@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS consent_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL,
     purpose VARCHAR(50) NOT NULL CHECK (purpose IN (
         'data_storage', 'data_processing', 'sharing_with_doctor',
@@ -70,15 +70,18 @@ BEGIN
         withdrawal_method = 'RIGHT_TO_ERASURE'
     WHERE account_id = p_account_id
     AND withdrawn_at IS NULL;
-
-    INSERT INTO audit_log (event, account_id, details)
-    VALUES (
-        'RIGHT_TO_ERASURE_COMPLETED',
-        p_account_id,
-        jsonb_build_object(
-            'members_affected', array_length(v_member_ids, 1),
-            'executed_at', NOW()::text
-        )
-    );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- consent RLS (moved from 0003 since table is created here)
+ALTER TABLE consent_records ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY select_own_consent ON consent_records
+    FOR SELECT USING (account_id = auth.uid());
+
+CREATE POLICY insert_own_consent ON consent_records
+    FOR INSERT WITH CHECK (account_id = auth.uid());
+
+CREATE POLICY update_own_consent ON consent_records
+    FOR UPDATE USING (account_id = auth.uid());
+

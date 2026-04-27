@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS reference_ranges (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     parameter_name VARCHAR(100) NOT NULL,
     sex VARCHAR(10) NOT NULL DEFAULT 'any' CHECK (sex IN ('male', 'female', 'any')),
     age_min INT,
