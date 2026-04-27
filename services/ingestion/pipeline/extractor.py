@@ -38,7 +38,18 @@ def _flag_abbreviation_hazards(raw_text: str, extractions: list[dict]) -> list[d
 
 
 async def _extract_via_tesseract(image_bytes: bytes) -> tuple[str, list[dict]]:
-    import pytesseract
+    try:
+        import pytesseract
+    except ImportError:
+        logger.warning("pytesseract not installed, skipping OCR fallback")
+        return "", []
+
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        logger.warning("tesseract binary not found, skipping OCR fallback")
+        return "", []
+
     import numpy as np
 
     processed = prepare_for_ocr(image_bytes)
